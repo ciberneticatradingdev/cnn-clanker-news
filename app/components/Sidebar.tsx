@@ -1,11 +1,10 @@
 'use client';
 
-import type { NewsItem } from '../api/news/route';
+import type { NewsItem } from '../api/broadcast/route';
 
 interface SidebarProps {
   stories: NewsItem[];
   currentIndex: number;
-  onSelect: (index: number) => void;
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -16,11 +15,11 @@ const CATEGORY_COLORS: Record<string, string> = {
 };
 
 const SOURCES = [
-  { name: 'BBC NEWS', color: '#CC0000', status: 'LIVE' },
-  { name: 'REUTERS', color: '#FF6600', status: 'LIVE' },
-  { name: 'NY TIMES', color: '#000000', status: 'LIVE' },
-  { name: 'AL JAZEERA', color: '#00873d', status: 'LIVE' },
-  { name: 'GOOGLE NEWS', color: '#4285f4', status: 'LIVE' },
+  { name: 'BBC NEWS', color: '#CC0000' },
+  { name: 'REUTERS', color: '#FF6600' },
+  { name: 'NY TIMES', color: '#666' },
+  { name: 'AL JAZEERA', color: '#00873d' },
+  { name: 'GOOGLE NEWS', color: '#4285f4' },
 ];
 
 function timeAgo(ts: string) {
@@ -33,46 +32,36 @@ function timeAgo(ts: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export default function Sidebar({ stories, currentIndex, onSelect }: SidebarProps) {
+// Sidebar is read-only — the broadcast director controls which story is active
+export default function Sidebar({ stories, currentIndex }: SidebarProps) {
   const topStories = stories.slice(0, 8);
   const trending = stories.slice(8, 14);
-
   const categories = Array.from(new Set(stories.map(s => s.category)));
 
   return (
     <div className="flex flex-col gap-4 w-full">
-      {/* Sources monitored */}
+      {/* Sources */}
       <div className="rounded border border-blue-800/40 bg-[#0d1f3c] p-3">
-        <h3 className="mb-3 text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2">
-          Live Sources
-        </h3>
+        <h3 className="mb-3 text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2">Live Sources</h3>
         <div className="flex flex-col gap-1.5">
           {SOURCES.map(src => (
             <div key={src.name} className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div
                   className="h-2 w-2 rounded-full"
-                  style={{
-                    backgroundColor: '#00ff88',
-                    boxShadow: '0 0 4px #00ff88',
-                    animation: 'status-pulse 1.5s ease-in-out infinite alternate',
-                  }}
+                  style={{ backgroundColor: '#00ff88', boxShadow: '0 0 4px #00ff88', animation: 'status-pulse 1.5s ease-in-out infinite alternate' }}
                 />
                 <span className="text-[11px] font-bold text-white/80">{src.name}</span>
               </div>
-              <span className="rounded bg-[#CC0000] px-1.5 py-0.5 text-[9px] font-black text-white">
-                {src.status}
-              </span>
+              <span className="rounded bg-[#CC0000] px-1.5 py-0.5 text-[9px] font-black text-white">LIVE</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Category filter pills */}
+      {/* Coverage */}
       <div className="rounded border border-blue-800/40 bg-[#0d1f3c] p-3">
-        <h3 className="mb-2 text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2">
-          Coverage
-        </h3>
+        <h3 className="mb-2 text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2">Coverage</h3>
         <div className="flex flex-wrap gap-1.5">
           {categories.map(cat => (
             <span
@@ -90,67 +79,60 @@ export default function Sidebar({ stories, currentIndex, onSelect }: SidebarProp
         </div>
       </div>
 
-      {/* Top Stories */}
+      {/* Top Stories — server-driven current index highlighted */}
       <div className="rounded border border-blue-800/40 bg-[#0d1f3c] p-3">
-        <h3 className="mb-3 text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2">
-          Top Stories
-        </h3>
+        <h3 className="mb-3 text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2">Top Stories</h3>
         <div className="flex flex-col gap-2">
-          {topStories.map((story, i) => (
-            <button
-              key={story.id}
-              onClick={() => onSelect(i)}
-              className="group text-left w-full rounded p-2 transition-colors"
-              style={{
-                backgroundColor: currentIndex === i ? 'rgba(58,142,255,0.1)' : 'transparent',
-                borderLeft: currentIndex === i ? '2px solid #3a8eff' : '2px solid transparent',
-              }}
-            >
-              <div className="flex items-start gap-2">
-                <span
-                  className="mt-0.5 shrink-0 text-[10px] font-black"
-                  style={{ color: CATEGORY_COLORS[story.category] || '#3a8eff' }}
-                >
-                  {String(i + 1).padStart(2, '0')}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-white/85 text-xs leading-tight group-hover:text-white transition-colors line-clamp-2">
-                    {story.title}
-                  </p>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <span
-                      className="text-[9px] font-bold"
-                      style={{ color: CATEGORY_COLORS[story.category] || '#3a8eff' }}
+          {topStories.map((story, i) => {
+            const isActive = currentIndex === i;
+            return (
+              <div
+                key={story.id}
+                className="text-left w-full rounded p-2 transition-colors"
+                style={{
+                  backgroundColor: isActive ? 'rgba(58,142,255,0.1)' : 'transparent',
+                  borderLeft: isActive ? '2px solid #3a8eff' : '2px solid transparent',
+                }}
+              >
+                <div className="flex items-start gap-2">
+                  <span
+                    className="mt-0.5 shrink-0 text-[10px] font-black"
+                    style={{ color: isActive ? '#3a8eff' : (CATEGORY_COLORS[story.category] || '#3a8eff') }}
+                  >
+                    {isActive ? '▶' : String(i + 1).padStart(2, '0')}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p
+                      className="text-xs leading-tight line-clamp-2"
+                      style={{ color: isActive ? 'white' : 'rgba(255,255,255,0.75)' }}
                     >
-                      {story.category}
-                    </span>
-                    <span className="text-blue-600 text-[9px]">•</span>
-                    <span className="text-blue-400/60 text-[9px] font-mono">{timeAgo(story.timestamp)}</span>
+                      {story.isBreaking && <span className="text-red-400 font-black mr-1 text-[9px]">BREAKING</span>}
+                      {story.title}
+                    </p>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <span className="text-[9px] font-bold" style={{ color: CATEGORY_COLORS[story.category] || '#3a8eff' }}>
+                        {story.category}
+                      </span>
+                      <span className="text-blue-600 text-[9px]">•</span>
+                      <span className="text-blue-400/60 text-[9px] font-mono">{timeAgo(story.timestamp)}</span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </button>
-          ))}
+            );
+          })}
         </div>
       </div>
 
       {/* Trending */}
       <div className="rounded border border-blue-800/40 bg-[#0d1f3c] p-3">
-        <h3 className="mb-3 text-[10px] font-black tracking-widest text-orange-400 uppercase border-b border-orange-800/40 pb-2">
-          🔥 Trending
-        </h3>
+        <h3 className="mb-3 text-[10px] font-black tracking-widest text-orange-400 uppercase border-b border-orange-800/40 pb-2">Trending</h3>
         <div className="flex flex-col gap-2">
-          {trending.map((story, i) => (
-            <button
-              key={story.id}
-              onClick={() => onSelect(i + 8)}
-              className="text-left group"
-            >
-              <p className="text-white/70 text-xs leading-snug group-hover:text-white transition-colors line-clamp-2">
-                {story.title}
-              </p>
+          {trending.map(story => (
+            <div key={story.id} className="text-left">
+              <p className="text-white/70 text-xs leading-snug line-clamp-2">{story.title}</p>
               <span className="text-[9px] text-orange-400/70 font-mono">{story.source}</span>
-            </button>
+            </div>
           ))}
         </div>
       </div>

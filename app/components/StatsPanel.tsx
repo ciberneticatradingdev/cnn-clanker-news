@@ -5,9 +5,10 @@ import { useEffect, useState } from 'react';
 interface StatsPanelProps {
   storyCount: number;
   sourceCount: number;
+  viewerCount: number;
 }
 
-export default function StatsPanel({ storyCount, sourceCount }: StatsPanelProps) {
+export default function StatsPanel({ storyCount, sourceCount, viewerCount }: StatsPanelProps) {
   const [uptime, setUptime] = useState(0);
   const [analyzed, setAnalyzed] = useState(0);
 
@@ -19,21 +20,21 @@ export default function StatsPanel({ storyCount, sourceCount }: StatsPanelProps)
     return () => clearInterval(interval);
   }, []);
 
+  // Animate analyzed counter
   useEffect(() => {
     if (storyCount === 0) return;
-    // Animate counter up
-    let current = 0;
     const target = storyCount * 1000 + Math.floor(Math.random() * 40000);
-    const step = Math.ceil(target / 60);
+    let current = analyzed || 0;
+    const step = Math.ceil((target - current) / 60);
     const interval = setInterval(() => {
       current = Math.min(current + step, target);
       setAnalyzed(current);
       if (current >= target) clearInterval(interval);
     }, 30);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storyCount]);
 
-  // Increment analyzed counter slowly over time
   useEffect(() => {
     const interval = setInterval(() => {
       setAnalyzed(prev => prev + Math.floor(Math.random() * 3 + 1));
@@ -51,8 +52,8 @@ export default function StatsPanel({ storyCount, sourceCount }: StatsPanelProps)
   const stats = [
     { label: 'Stories Analyzed', value: analyzed.toLocaleString(), color: '#3a8eff', icon: '📡' },
     { label: 'Sources Live', value: sourceCount.toString(), color: '#00ff88', icon: '🔴' },
-    { label: 'Languages', value: '12', color: '#a855f7', icon: '🌐' },
-    { label: 'AI Uptime', value: formatUptime(uptime), color: '#f59e0b', icon: '⏱' },
+    { label: 'Viewers Now', value: viewerCount.toString(), color: '#f59e0b', icon: '👁' },
+    { label: 'AI Uptime', value: formatUptime(uptime), color: '#a855f7', icon: '⏱' },
   ];
 
   return (
@@ -64,10 +65,7 @@ export default function StatsPanel({ storyCount, sourceCount }: StatsPanelProps)
           style={{ borderColor: `${stat.color}33` }}
         >
           <div className="text-lg mb-0.5">{stat.icon}</div>
-          <div
-            className="font-mono text-lg font-black leading-none tracking-tight"
-            style={{ color: stat.color }}
-          >
+          <div className="font-mono text-lg font-black leading-none tracking-tight" style={{ color: stat.color }}>
             {stat.value}
           </div>
           <div className="mt-1 text-[9px] font-bold uppercase tracking-widest text-white/40">

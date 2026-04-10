@@ -1,6 +1,6 @@
 'use client';
 
-import type { NewsItem } from '../api/news/route';
+import type { NewsItem } from '../api/broadcast/route';
 
 interface NewsGridProps {
   stories: NewsItem[];
