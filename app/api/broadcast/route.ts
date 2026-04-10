@@ -20,6 +20,7 @@ interface BroadcastState {
   stories: NewsItem[];
   currentIndex: number;
   startedAt: number;
+  broadcastStartedAt: number; // global broadcast start — never changes
   viewerCount: number;
   totalAnalyzed: number;
   lastFetchAt: number;
@@ -44,6 +45,7 @@ if (!global.__cnn_state) {
     stories: [],
     currentIndex: 0,
     startedAt: Date.now(),
+    broadcastStartedAt: Date.now(),
     viewerCount: 0,
     totalAnalyzed: 0,
     lastFetchAt: 0,
@@ -261,6 +263,7 @@ export async function GET(_req: NextRequest) {
         story: currentStory(),
         currentIndex: s.currentIndex,
         startedAt: s.startedAt,
+        broadcastStartedAt: s.broadcastStartedAt, // global broadcast start — survives client refresh
         totalStories: s.stories.length,
         stories: s.stories.slice(0, 30),
         viewerCount: cls.size,

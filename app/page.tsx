@@ -23,6 +23,7 @@ interface BroadcastSnapshot {
   totalAnalyzed: number;
   storyCount: number;
   sourceCount: number;
+  serverStartedAt: number;
 }
 
 const DEFAULT_SNAPSHOT: BroadcastSnapshot = {
@@ -35,6 +36,7 @@ const DEFAULT_SNAPSHOT: BroadcastSnapshot = {
   totalAnalyzed: 0,
   storyCount: 0,
   sourceCount: 5,
+  serverStartedAt: 0,
 };
 
 // ─── Live Clock ───────────────────────────────────────────────────────────────
@@ -70,6 +72,7 @@ export default function CNNPage() {
   const [breakingStory, setBreakingStory] = useState<NewsItem | null>(null);
   const [connected, setConnected] = useState(false);
   const [activeTab, setActiveTab] = useState<'anchor' | 'grid'>('anchor');
+  const [tuned, setTuned] = useState(false); // user clicked to enable audio
   const esRef = useRef<EventSource | null>(null);
 
   // Connect to SSE broadcast
@@ -88,7 +91,7 @@ export default function CNNPage() {
 
         switch (msg.type) {
           case 'state': {
-            const s = msg as unknown as BroadcastSnapshot & { type: string };
+            const s = msg as unknown as BroadcastSnapshot & { type: string; broadcastStartedAt?: number };
             setSnap({
               story: s.story,
               currentIndex: s.currentIndex,
@@ -99,6 +102,7 @@ export default function CNNPage() {
               totalAnalyzed: s.totalAnalyzed,
               storyCount: s.storyCount,
               sourceCount: s.sourceCount,
+              serverStartedAt: s.broadcastStartedAt ?? s.startedAt,
             });
             setTickerStories((s.stories ?? []).slice(0, 20));
             break;
@@ -149,6 +153,66 @@ export default function CNNPage() {
   }, []);
 
   const loading = !connected && snap.stories.length === 0;
+
+  // Tune-in overlay — required for browser audio autoplay policy
+  if (!tuned) {
+    return (
+      <div
+        className="min-h-screen flex flex-col items-center justify-center cursor-pointer select-none"
+        style={{ background: 'linear-gradient(180deg, #020610 0%, #0A1628 50%, #020610 100%)' }}
+        onClick={() => {
+          // Unlock audio context with a silent utterance
+          if ('speechSynthesis' in window) {
+            const unlock = new SpeechSynthesisUtterance('');
+            unlock.volume = 0;
+            window.speechSynthesis.speak(unlock);
+          }
+          setTuned(true);
+        }}
+      >
+        {/* Scanlines */}
+        <div className="fixed inset-0 pointer-events-none z-50" style={{ background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.06) 0px, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 3px)', mixBlendMode: 'multiply' }} />
+
+        {/* Glow */}
+        <div className="absolute rounded-full" style={{ width: 400, height: 400, background: 'radial-gradient(circle, rgba(58,142,255,0.15) 0%, transparent 70%)', animation: 'pulse-glow 2s ease-in-out infinite alternate' }} />
+
+        {/* Logo */}
+        <div className="relative z-10 flex flex-col items-center gap-6">
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full" style={{ backgroundColor: '#CC0000', animation: 'live-pulse 1.5s ease-in-out infinite' }} />
+            <span className="text-xs font-black text-white tracking-[0.3em]">LIVE BROADCAST</span>
+          </div>
+
+          <div className="text-center">
+            <div className="text-5xl font-black tracking-tight text-white leading-none">CLANKER</div>
+            <div className="text-5xl font-black tracking-tight leading-none" style={{ color: '#CC0000' }}>NEWS</div>
+            <div className="text-5xl font-black tracking-tight text-white leading-none">NETWORK</div>
+          </div>
+
+          <div className="flex items-center gap-2 mt-2">
+            <span className="rounded px-2 py-1 text-xs font-black text-white tracking-[0.15em]" style={{ backgroundColor: '#3a8eff' }}>$CNN</span>
+            <span className="text-xs text-blue-300/50 tracking-wider">AI-POWERED NEWS</span>
+          </div>
+
+          {/* Tune in button */}
+          <div
+            className="mt-8 rounded-lg border-2 px-10 py-4 text-center transition-all hover:scale-105"
+            style={{
+              borderColor: '#CC0000',
+              background: 'rgba(204,0,0,0.1)',
+              boxShadow: '0 0 30px rgba(204,0,0,0.3), 0 0 60px rgba(204,0,0,0.1)',
+              animation: 'border-glow 2s ease-in-out infinite',
+            }}
+          >
+            <div className="text-xl font-black text-white tracking-[0.2em]">▶ TUNE IN</div>
+            <div className="text-[10px] text-red-300/60 mt-1 tracking-wider">CLICK TO START LIVE BROADCAST</div>
+          </div>
+
+          <div className="mt-4 text-[10px] text-blue-400/40 tracking-wider">Audio required for full experience</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen pb-9" style={{ background: 'linear-gradient(180deg, #080e1a 0%, #0A1628 100%)' }}>
@@ -255,6 +319,8 @@ export default function CNNPage() {
               storyCount={snap.totalAnalyzed}
               sourceCount={snap.sourceCount}
               viewerCount={snap.viewerCount}
+              serverStartedAt={snap.serverStartedAt}
+              totalAnalyzed={snap.totalAnalyzed}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr_240px] gap-4">
