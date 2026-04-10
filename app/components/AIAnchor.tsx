@@ -9,167 +9,152 @@ interface AIAnchorProps {
   startedAt: number;
   storyCount: number;
   totalStories: number;
-}
-
-// ─── Anchor narration builder ──────────────────────────────────────────────────
-
-const TRANSITIONS = [
-  'Moving on to our next story. ',
-  'In other news. ',
-  'Developing story. ',
-  'Sources are reporting. ',
-  'Our correspondents have confirmed. ',
-  'We are monitoring this situation closely. ',
-  'Turning now to another developing story. ',
-];
-
-const STATION_IDS = [
-  'You are watching the Clanker News Network. Stay with us. ',
-  'This is CNN — the Clanker News Network. We continue our coverage. ',
-  'We appreciate you tuning in to the Clanker News Network. ',
-];
-
-function buildNarration(story: NewsItem, storyCount: number): string {
-  const isFirst = storyCount <= 1;
-
-  let prefix = '';
-  if (isFirst) {
-    prefix = 'Good evening. This is the Clanker News Network. I am your AI anchor. Let us begin. ';
-  } else if (storyCount % 5 === 0) {
-    prefix = STATION_IDS[(storyCount / 5) % STATION_IDS.length];
-  } else {
-    prefix = TRANSITIONS[(storyCount - 1) % TRANSITIONS.length];
-  }
-
-  const isBreaking = story.isBreaking ? 'Breaking news. ' : '';
-  const source = `From ${story.source}. `;
-  const headline = `${story.title}. `;
-  const summary = story.summary && story.summary !== 'Read the full story.' ? `${story.summary}. ` : '';
-  const sign = 'This is Clanker, reporting live. ';
-
-  return prefix + isBreaking + source + headline + summary + sign;
+  analysis: string | null;
+  audioId: string | null;
+  isThinking: boolean;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function AIAnchor({ story, currentIndex, startedAt, storyCount, totalStories }: AIAnchorProps) {
-  const [displayText, setDisplayText] = useState('');
+export default function AIAnchor({
+  story,
+  currentIndex,
+  startedAt,
+  storyCount,
+  totalStories,
+  analysis,
+  audioId,
+  isThinking,
+}: AIAnchorProps) {
+  const [headlineText, setHeadlineText] = useState('');
+  const [analysisText, setAnalysisText] = useState('');
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [isTyping, setIsTyping] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isTypingHeadline, setIsTypingHeadline] = useState(false);
+  const [isTypingAnalysis, setIsTypingAnalysis] = useState(false);
   const [barsActive, setBarsActive] = useState(false);
-  const typeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [muted, setMuted] = useState(false);
+
+  const headlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const analysisTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const analysisDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevStoryIdRef = useRef<string | null>(null);
+  const prevAudioIdRef = useRef<string | null>(null);
+  const muteRef = useRef(muted);
+  useEffect(() => { muteRef.current = muted; }, [muted]);
 
-  const clearTypewriter = useCallback(() => {
-    if (typeTimerRef.current) {
-      clearTimeout(typeTimerRef.current);
-      typeTimerRef.current = null;
-    }
-  }, []);
+  // ── Typewriter helpers ──────────────────────────────────────────────────────
 
-  const typeText = useCallback((text: string, onDone?: () => void) => {
-    clearTypewriter();
-    setDisplayText('');
-    setIsTyping(true);
+  const typeText = useCallback((
+    text: string,
+    timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
+    setter: (t: string) => void,
+    setTyping: (b: boolean) => void,
+    onDone?: () => void,
+  ) => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    setter('');
+    setTyping(true);
     let i = 0;
 
     const type = () => {
       if (i < text.length) {
-        setDisplayText(text.slice(0, i + 1));
+        setter(text.slice(0, i + 1));
         i++;
         const ch = text[i - 1];
-        const delay = (ch === '.' || ch === ',') ? 55 : 18;
-        typeTimerRef.current = setTimeout(type, delay);
+        const delay = ch === '.' || ch === ',' ? 55 : 18;
+        timerRef.current = setTimeout(type, delay);
       } else {
-        setIsTyping(false);
+        setTyping(false);
         onDone?.();
       }
     };
-    typeTimerRef.current = setTimeout(type, 60);
-  }, [clearTypewriter]);
-
-  const speakNarration = useCallback((text: string) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-
-    const utter = new SpeechSynthesisUtterance(text);
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v =>
-      v.name.includes('Google US English') ||
-      v.name.includes('Alex') ||
-      v.name.includes('Daniel') ||
-      (v.lang === 'en-US' && v.name.includes('Male'))
-    ) ?? voices.find(v => v.lang === 'en-US' || v.lang === 'en-GB');
-    if (preferred) utter.voice = preferred;
-
-    utter.rate = 0.9;
-    utter.pitch = 0.93;
-    utter.volume = 0.92;
-
-    utter.onstart = () => { setIsSpeaking(true); setBarsActive(true); setIsAnalyzing(false); };
-    utter.onend = () => {
-      setIsSpeaking(false);
-      setBarsActive(false);
-      setIsAnalyzing(true); // show "ANALYZING FEEDS..." until next story
-    };
-    utter.onerror = () => {
-      setIsSpeaking(false);
-      setBarsActive(false);
-      setIsAnalyzing(true);
-    };
-
-    window.speechSynthesis.speak(utter);
+    timerRef.current = setTimeout(type, 60);
   }, []);
 
-  // Load voices on mount (Chrome needs onvoiceschanged)
-  useEffect(() => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.getVoices();
-    const handler = () => window.speechSynthesis.getVoices();
-    window.speechSynthesis.addEventListener('voiceschanged', handler);
-    return () => {
-      window.speechSynthesis.removeEventListener('voiceschanged', handler);
-      window.speechSynthesis.cancel();
-    };
-  }, []);
+  // ── Audio playback ──────────────────────────────────────────────────────────
 
-  // React to story changes from SSE
   useEffect(() => {
-    if (!story) {
-      setIsAnalyzing(true);
-      setDisplayText('');
-      return;
+    if (!audioId || audioId === prevAudioIdRef.current) return;
+    prevAudioIdRef.current = audioId;
+
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+      audioRef.current = null;
     }
 
-    // Deduplicate — only act if story actually changed
+    const audio = new Audio(`/api/tts?id=${audioId}`);
+    audio.muted = muteRef.current;
+    audioRef.current = audio;
+
+    audio.onplay = () => { setIsSpeaking(true); setBarsActive(true); };
+    audio.onended = () => { setIsSpeaking(false); setBarsActive(false); };
+    audio.onerror = () => { setIsSpeaking(false); setBarsActive(false); };
+
+    audio.play().catch(err => console.error('Audio play failed:', err));
+  }, [audioId]);
+
+  // Sync mute state to active audio element
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.muted = muted;
+  }, [muted]);
+
+  // ── Story change ────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!story) return;
     if (story.id === prevStoryIdRef.current) return;
     prevStoryIdRef.current = story.id;
 
-    clearTypewriter();
-    window.speechSynthesis?.cancel();
-    setIsSpeaking(false);
-    setBarsActive(false);
-    setIsAnalyzing(false);
+    // Clear previous typewriters
+    if (headlineTimerRef.current) { clearTimeout(headlineTimerRef.current); headlineTimerRef.current = null; }
+    if (analysisTimerRef.current) { clearTimeout(analysisTimerRef.current); analysisTimerRef.current = null; }
+    if (analysisDelayRef.current) { clearTimeout(analysisDelayRef.current); analysisDelayRef.current = null; }
+    setAnalysisText('');
+    setIsTypingAnalysis(false);
 
-    const narration = buildNarration(story, storyCount);
-
-    // Type the headline, then speak full narration
-    typeText(story.title, () => {
-      setTimeout(() => speakNarration(narration), 300);
-    });
+    typeText(story.title, headlineTimerRef, setHeadlineText, setIsTypingHeadline);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [story?.id, startedAt]);
 
+  // ── Analysis typewriter (delayed so headline starts first) ─────────────────
+
+  useEffect(() => {
+    if (!analysis) { setAnalysisText(''); return; }
+    if (analysisDelayRef.current) clearTimeout(analysisDelayRef.current);
+    if (analysisTimerRef.current) { clearTimeout(analysisTimerRef.current); analysisTimerRef.current = null; }
+
+    analysisDelayRef.current = setTimeout(() => {
+      typeText(analysis, analysisTimerRef, setAnalysisText, setIsTypingAnalysis);
+    }, 1200);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysis]);
+
+  // ── Cleanup on unmount ──────────────────────────────────────────────────────
+
+  useEffect(() => {
+    return () => {
+      if (headlineTimerRef.current) clearTimeout(headlineTimerRef.current);
+      if (analysisTimerRef.current) clearTimeout(analysisTimerRef.current);
+      if (analysisDelayRef.current) clearTimeout(analysisDelayRef.current);
+      audioRef.current?.pause();
+    };
+  }, []);
+
+  // ── Derived state ───────────────────────────────────────────────────────────
+
   const bars = Array.from({ length: 9 });
 
-  const statusLabel = isAnalyzing
-    ? 'ANALYZING FEEDS...'
-    : isTyping
-    ? 'PROCESSING...'
+  const statusLabel = isThinking
+    ? 'AI THINKING...'
     : isSpeaking
     ? 'ON AIR'
+    : isTypingHeadline
+    ? 'PROCESSING...'
     : 'STANDBY';
+
+  const showAnalyzing = isThinking && !story;
 
   return (
     <div className="flex flex-col items-center w-full h-full">
@@ -186,6 +171,19 @@ export default function AIAnchor({ story, currentIndex, startedAt, storyCount, t
           }}
         />
 
+        {/* Brain/thinking pulse ring */}
+        {isThinking && (
+          <div
+            className="absolute rounded-full border-2"
+            style={{
+              width: 180,
+              height: 180,
+              borderColor: 'rgba(245,158,11,0.6)',
+              animation: 'pulse-glow 0.6s ease-in-out infinite alternate',
+            }}
+          />
+        )}
+
         {/* Anchor silhouette */}
         <svg
           width="160"
@@ -197,8 +195,8 @@ export default function AIAnchor({ story, currentIndex, startedAt, storyCount, t
           style={{
             filter: isSpeaking
               ? 'drop-shadow(0 0 14px #3a8eff) drop-shadow(0 0 28px rgba(58,142,255,0.5))'
-              : isAnalyzing
-              ? 'drop-shadow(0 0 6px rgba(58,142,255,0.2))'
+              : isThinking
+              ? 'drop-shadow(0 0 10px rgba(245,158,11,0.6))'
               : 'drop-shadow(0 0 4px rgba(58,142,255,0.3))',
             transition: 'filter 0.4s ease',
           }}
@@ -221,13 +219,13 @@ export default function AIAnchor({ story, currentIndex, startedAt, storyCount, t
           <ellipse cx="92" cy="84" rx="7" ry="6" fill="#0A1628" />
           <ellipse
             cx="68" cy="84" rx="5" ry="4"
-            fill={isSpeaking ? '#3a8eff' : isAnalyzing ? '#1a3a8f' : '#1a5abf'}
-            style={{ animation: isSpeaking ? 'eye-pulse 0.8s ease-in-out infinite alternate' : undefined }}
+            fill={isSpeaking ? '#3a8eff' : isThinking ? '#f59e0b' : '#1a5abf'}
+            style={{ animation: (isSpeaking || isThinking) ? 'eye-pulse 0.8s ease-in-out infinite alternate' : undefined }}
           />
           <ellipse
             cx="92" cy="84" rx="5" ry="4"
-            fill={isSpeaking ? '#3a8eff' : isAnalyzing ? '#1a3a8f' : '#1a5abf'}
-            style={{ animation: isSpeaking ? 'eye-pulse 0.8s ease-in-out infinite alternate' : undefined }}
+            fill={isSpeaking ? '#3a8eff' : isThinking ? '#f59e0b' : '#1a5abf'}
+            style={{ animation: (isSpeaking || isThinking) ? 'eye-pulse 0.8s ease-in-out infinite alternate' : undefined }}
           />
           <circle cx="70" cy="82" r="1.5" fill="white" opacity="0.8" />
           <circle cx="94" cy="82" r="1.5" fill="white" opacity="0.8" />
@@ -258,14 +256,18 @@ export default function AIAnchor({ story, currentIndex, startedAt, storyCount, t
               key={i}
               className="w-[3px] rounded-full"
               style={{
-                backgroundColor: barsActive ? '#3a8eff' : isAnalyzing ? '#1a3060' : '#1a3a6b',
+                backgroundColor: barsActive
+                  ? '#3a8eff'
+                  : isThinking
+                  ? '#f59e0b'
+                  : '#1a3a6b',
                 height: barsActive ? undefined : 4,
                 minHeight: 4,
                 maxHeight: 36,
                 animation: barsActive
                   ? `wave-bar ${0.4 + i * 0.07}s ease-in-out infinite alternate`
-                  : isAnalyzing
-                  ? `wave-bar ${0.8 + i * 0.12}s ease-in-out infinite alternate`
+                  : isThinking
+                  ? `wave-bar ${0.8 + i * 0.1}s ease-in-out infinite alternate`
                   : undefined,
                 animationDelay: `${i * 0.06}s`,
                 transition: 'background-color 0.3s',
@@ -275,38 +277,76 @@ export default function AIAnchor({ story, currentIndex, startedAt, storyCount, t
         </div>
       </div>
 
-      {/* Status + story counter */}
+      {/* Status row */}
       <div className="mt-2 flex items-center justify-between w-full">
         <div className="flex items-center gap-2">
           <div
             className="h-2 w-2 rounded-full"
             style={{
-              backgroundColor: isSpeaking ? '#00ff88' : isAnalyzing ? '#f59e0b' : '#666',
-              boxShadow: isSpeaking ? '0 0 6px #00ff88' : isAnalyzing ? '0 0 6px #f59e0b' : 'none',
-              animation: (isSpeaking || isAnalyzing) ? 'status-pulse 0.6s ease-in-out infinite alternate' : undefined,
+              backgroundColor: isSpeaking ? '#00ff88' : isThinking ? '#f59e0b' : '#666',
+              boxShadow: isSpeaking ? '0 0 6px #00ff88' : isThinking ? '0 0 6px #f59e0b' : 'none',
+              animation: (isSpeaking || isThinking) ? 'status-pulse 0.6s ease-in-out infinite alternate' : undefined,
             }}
           />
-          <span className="text-xs font-mono" style={{ color: isSpeaking ? '#00ff88' : isAnalyzing ? '#f59e0b' : '#666' }}>
+          <span className="text-xs font-mono" style={{ color: isSpeaking ? '#00ff88' : isThinking ? '#f59e0b' : '#666' }}>
             {statusLabel}
+            {isThinking && (
+              <span style={{ animation: 'status-pulse 0.5s ease-in-out infinite alternate' }}>
+                {' '}●●●
+              </span>
+            )}
           </span>
         </div>
-        <span className="text-[10px] text-blue-500 font-mono">
-          STORY {currentIndex + 1} / {totalStories}
-        </span>
+        <div className="flex items-center gap-3">
+          {/* Mute toggle */}
+          <button
+            onClick={() => setMuted(m => !m)}
+            className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-mono transition-colors"
+            style={{
+              color: muted ? '#666' : '#3a8eff',
+              border: '1px solid',
+              borderColor: muted ? '#333' : 'rgba(58,142,255,0.4)',
+              background: muted ? 'transparent' : 'rgba(58,142,255,0.05)',
+            }}
+          >
+            {muted ? '🔇 MUTED' : '🔊 AUDIO'}
+          </button>
+          <span className="text-[10px] text-blue-500 font-mono">
+            STORY {currentIndex + 1} / {totalStories}
+          </span>
+        </div>
       </div>
 
-      {/* Analyzing overlay */}
-      {isAnalyzing && !isSpeaking && !story && (
-        <div className="mt-4 w-full rounded border border-yellow-800/40 bg-[#1a1200] p-4 text-center">
-          <div className="text-yellow-400 font-mono text-sm font-black tracking-widest animate-pulse">
-            ANALYZING FEEDS...
+      {/* AI Thinking overlay */}
+      {isThinking && (
+        <div className="mt-4 w-full rounded border border-yellow-800/60 bg-[#1a1200] p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-lg">🧠</span>
+            <div className="text-yellow-400 font-mono text-sm font-black tracking-widest animate-pulse">
+              ANALYZING FEEDS...
+            </div>
           </div>
-          <div className="text-yellow-600/60 text-[10px] mt-1">Next broadcast segment loading</div>
+          <div className="flex gap-1.5">
+            {[0, 1, 2, 3, 4, 5, 6].map(i => (
+              <div
+                key={i}
+                className="h-1 rounded-full bg-yellow-600/60"
+                style={{
+                  width: `${8 + Math.sin(i) * 6}px`,
+                  animation: `wave-bar ${0.4 + i * 0.08}s ease-in-out infinite alternate`,
+                  animationDelay: `${i * 0.07}s`,
+                }}
+              />
+            ))}
+          </div>
+          <div className="text-yellow-600/50 text-[10px] mt-2 font-mono">
+            Groq Llama 3.3 · OpenAI TTS · Onyx voice
+          </div>
         </div>
       )}
 
       {/* Headline display */}
-      {story && (
+      {story && !isThinking && (
         <div className="mt-4 w-full rounded border border-blue-800/40 bg-[#0d1f3c] p-4 min-h-[80px]">
           <div className="mb-1 flex items-center gap-2">
             <span
@@ -319,24 +359,41 @@ export default function AIAnchor({ story, currentIndex, startedAt, storyCount, t
             <span className="text-[10px] text-blue-600/60 font-mono">{story.category}</span>
           </div>
           <p className="text-white font-semibold leading-snug text-sm min-h-[40px]">
-            {displayText}
-            {isTyping && <span className="ml-0.5 inline-block w-0.5 h-4 bg-blue-400 animate-pulse align-middle" />}
+            {headlineText}
+            {isTypingHeadline && (
+              <span className="ml-0.5 inline-block w-0.5 h-4 bg-blue-400 animate-pulse align-middle" />
+            )}
           </p>
         </div>
       )}
 
       {/* Story summary */}
-      {story && !isTyping && (
+      {story && !isThinking && !isTypingHeadline && (
         <div className="mt-3 w-full rounded bg-[#0d1f3c]/60 p-3 border border-blue-900/30">
           <p className="text-blue-200/70 text-xs leading-relaxed">{story.summary}</p>
         </div>
       )}
 
-      {/* Analyzing banner between stories */}
-      {isAnalyzing && story && (
-        <div className="mt-3 w-full rounded border border-yellow-800/30 bg-[#1a1200]/60 p-2 flex items-center gap-2">
-          <div className="h-1.5 w-1.5 rounded-full bg-yellow-400" style={{ animation: 'status-pulse 0.8s ease-in-out infinite alternate' }} />
-          <span className="text-yellow-400/80 font-mono text-[10px] tracking-widest">ANALYZING FEEDS... NEXT STORY INCOMING</span>
+      {/* CNN AI Insight */}
+      {(analysisText || isTypingAnalysis) && !isThinking && (
+        <div className="mt-3 w-full rounded border border-purple-800/50 bg-[#12082a] p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span
+              className="rounded px-2 py-0.5 text-[9px] font-black text-white tracking-widest"
+              style={{ background: 'linear-gradient(90deg, #7c3aed, #4f46e5)' }}
+            >
+              🤖 CNN AI INSIGHT
+            </span>
+            {isTypingAnalysis && (
+              <span className="text-[9px] text-purple-400/60 font-mono animate-pulse">GROQ ANALYZING...</span>
+            )}
+          </div>
+          <p className="text-purple-200/80 text-xs leading-relaxed">
+            {analysisText}
+            {isTypingAnalysis && (
+              <span className="ml-0.5 inline-block w-0.5 h-3.5 bg-purple-400 animate-pulse align-middle" />
+            )}
+          </p>
         </div>
       )}
     </div>

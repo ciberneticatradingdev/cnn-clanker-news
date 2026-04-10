@@ -24,6 +24,8 @@ interface BroadcastSnapshot {
   storyCount: number;
   sourceCount: number;
   serverStartedAt: number;
+  analysis: string | null;
+  audioId: string | null;
 }
 
 const DEFAULT_SNAPSHOT: BroadcastSnapshot = {
@@ -37,6 +39,8 @@ const DEFAULT_SNAPSHOT: BroadcastSnapshot = {
   storyCount: 0,
   sourceCount: 5,
   serverStartedAt: 0,
+  analysis: null,
+  audioId: null,
 };
 
 // ─── Live Clock ───────────────────────────────────────────────────────────────
@@ -73,6 +77,7 @@ export default function CNNPage() {
   const [connected, setConnected] = useState(false);
   const [activeTab, setActiveTab] = useState<'anchor' | 'grid'>('anchor');
   const [tuned, setTuned] = useState(false); // user clicked to enable audio
+  const [isThinking, setIsThinking] = useState(false);
   const esRef = useRef<EventSource | null>(null);
 
   // Connect to SSE broadcast
@@ -103,12 +108,19 @@ export default function CNNPage() {
               storyCount: s.storyCount,
               sourceCount: s.sourceCount,
               serverStartedAt: s.broadcastStartedAt ?? s.startedAt,
+              analysis: s.analysis ?? null,
+              audioId: s.audioId ?? null,
             });
             setTickerStories((s.stories ?? []).slice(0, 20));
             break;
           }
+          case 'thinking': {
+            setIsThinking(true);
+            break;
+          }
           case 'story-change': {
-            const sc = msg as { story: NewsItem; currentIndex: number; startedAt: number; totalStories: number; storyCount: number };
+            const sc = msg as { story: NewsItem; currentIndex: number; startedAt: number; totalStories: number; storyCount: number; analysis?: string; audioId?: string };
+            setIsThinking(false);
             setSnap(prev => ({
               ...prev,
               story: sc.story,
@@ -116,6 +128,8 @@ export default function CNNPage() {
               startedAt: sc.startedAt,
               totalStories: sc.totalStories,
               storyCount: sc.storyCount,
+              analysis: sc.analysis ?? null,
+              audioId: sc.audioId ?? null,
             }));
             break;
           }
@@ -160,15 +174,7 @@ export default function CNNPage() {
       <div
         className="min-h-screen flex flex-col items-center justify-center cursor-pointer select-none"
         style={{ background: 'linear-gradient(180deg, #020610 0%, #0A1628 50%, #020610 100%)' }}
-        onClick={() => {
-          // Unlock audio context with a silent utterance
-          if ('speechSynthesis' in window) {
-            const unlock = new SpeechSynthesisUtterance('');
-            unlock.volume = 0;
-            window.speechSynthesis.speak(unlock);
-          }
-          setTuned(true);
-        }}
+        onClick={() => setTuned(true)}
       >
         {/* Scanlines */}
         <div className="fixed inset-0 pointer-events-none z-50" style={{ background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.06) 0px, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 3px)', mixBlendMode: 'multiply' }} />
@@ -383,6 +389,9 @@ export default function CNNPage() {
                         startedAt={snap.startedAt}
                         storyCount={snap.storyCount}
                         totalStories={snap.totalStories}
+                        analysis={snap.analysis}
+                        audioId={snap.audioId}
+                        isThinking={isThinking}
                       />
                     ) : (
                       <NewsGrid
