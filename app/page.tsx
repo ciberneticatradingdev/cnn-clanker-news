@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import type { NewsItem } from './api/broadcast/route';
+import type { NewsItem } from './types';
 import Ticker from './components/Ticker';
 import Sidebar from './components/Sidebar';
 import StatsPanel from './components/StatsPanel';
@@ -11,37 +11,8 @@ import BreakingBanner from './components/BreakingBanner';
 
 const AIAnchor = dynamic(() => import('./components/AIAnchor'), { ssr: false });
 
-// ─── Broadcast state received from SSE ───────────────────────────────────────
-
-interface BroadcastSnapshot {
-  story: NewsItem | null;
-  currentIndex: number;
-  startedAt: number;
-  totalStories: number;
-  stories: NewsItem[];
-  viewerCount: number;
-  totalAnalyzed: number;
-  storyCount: number;
-  sourceCount: number;
-  serverStartedAt: number;
-  analysis: string | null;
-  audioId: string | null;
-}
-
-const DEFAULT_SNAPSHOT: BroadcastSnapshot = {
-  story: null,
-  currentIndex: 0,
-  startedAt: 0,
-  totalStories: 0,
-  stories: [],
-  viewerCount: 0,
-  totalAnalyzed: 0,
-  storyCount: 0,
-  sourceCount: 5,
-  serverStartedAt: 0,
-  analysis: null,
-  audioId: null,
-};
+const ROTATE_INTERVAL_MS = 20_000; // rotate story every 20s
+const POLL_INTERVAL_MS = 60_000;   // refresh news every 60s
 
 // ─── Live Clock ───────────────────────────────────────────────────────────────
 
@@ -71,154 +42,132 @@ function LiveClock() {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function CNNPage() {
-  const [snap, setSnap] = useState<BroadcastSnapshot>(DEFAULT_SNAPSHOT);
-  const [tickerStories, setTickerStories] = useState<NewsItem[]>([]);
-  const [breakingStory, setBreakingStory] = useState<NewsItem | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [activeTab, setActiveTab] = useState<'anchor' | 'grid'>('anchor');
-  const [tuned, setTuned] = useState(false); // user clicked to enable audio
+  const [stories, setStories] = useState<NewsItem[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [analysis, setAnalysis] = useState<string | null>(null);
   const [isThinking, setIsThinking] = useState(false);
-  const esRef = useRef<EventSource | null>(null);
+  const [breakingStory, setBreakingStory] = useState<NewsItem | null>(null);
+  const [activeTab, setActiveTab] = useState<'anchor' | 'grid'>('anchor');
+  const [sourcesActive, setSourcesActive] = useState(5);
+  const [totalAnalyzed, setTotalAnalyzed] = useState(0);
+  const [startedAt, setStartedAt] = useState<number>(Date.now());
+  const [loaded, setLoaded] = useState(false);
 
-  // Connect to SSE broadcast
-  useEffect(() => {
-    let es: EventSource;
+  const storiesRef = useRef<NewsItem[]>([]);
+  const currentIndexRef = useRef(0);
+  const analyzeInFlightRef = useRef<string | null>(null);
+  const rotateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    function connect() {
-      es = new EventSource('/api/broadcast');
-      esRef.current = es;
+  // ── Fetch news ───────────────────────────────────────────────────────────────
 
-      es.onopen = () => setConnected(true);
+  const fetchNews = useCallback(async () => {
+    try {
+      const res = await fetch('/api/news');
+      if (!res.ok) return;
+      const data = await res.json();
+      const incoming: NewsItem[] = data.stories ?? [];
+      if (incoming.length === 0) return;
 
-      es.onmessage = (e) => {
-        let msg: Record<string, unknown>;
-        try { msg = JSON.parse(e.data); } catch { return; }
+      setSourcesActive(data.sources ?? 5);
 
-        switch (msg.type) {
-          case 'state': {
-            const s = msg as unknown as BroadcastSnapshot & { type: string; broadcastStartedAt?: number };
-            setSnap({
-              story: s.story,
-              currentIndex: s.currentIndex,
-              startedAt: s.startedAt,
-              totalStories: s.totalStories,
-              stories: s.stories ?? [],
-              viewerCount: s.viewerCount,
-              totalAnalyzed: s.totalAnalyzed,
-              storyCount: s.storyCount,
-              sourceCount: s.sourceCount,
-              serverStartedAt: s.broadcastStartedAt ?? s.startedAt,
-              analysis: s.analysis ?? null,
-              audioId: s.audioId ?? null,
-            });
-            setTickerStories((s.stories ?? []).slice(0, 20));
-            break;
-          }
-          case 'thinking': {
-            setIsThinking(true);
-            break;
-          }
-          case 'story-change': {
-            const sc = msg as { story: NewsItem; currentIndex: number; startedAt: number; totalStories: number; storyCount: number; analysis?: string; audioId?: string };
-            setIsThinking(false);
-            setSnap(prev => ({
-              ...prev,
-              story: sc.story,
-              currentIndex: sc.currentIndex,
-              startedAt: sc.startedAt,
-              totalStories: sc.totalStories,
-              storyCount: sc.storyCount,
-              analysis: sc.analysis ?? null,
-              audioId: sc.audioId ?? null,
-            }));
-            break;
-          }
-          case 'breaking': {
-            const br = msg as { story: NewsItem };
-            setBreakingStory(br.story);
-            break;
-          }
-          case 'viewer-count': {
-            const vc = msg as { count: number };
-            setSnap(prev => ({ ...prev, viewerCount: vc.count }));
-            break;
-          }
-          case 'ticker': {
-            const tk = msg as { stories: NewsItem[] };
-            setTickerStories(tk.stories ?? []);
-            setSnap(prev => ({ ...prev, stories: tk.stories ?? prev.stories }));
-            break;
-          }
-        }
-      };
+      // Detect breaking stories (appeared since last fetch)
+      const prevIds = new Set(storiesRef.current.map(s => s.id));
+      const breaking = incoming.filter(s => s.isBreaking && !prevIds.has(s.id));
+      if (breaking.length > 0) {
+        setBreakingStory(breaking[0]);
+      }
 
-      es.onerror = () => {
-        setConnected(false);
-        es.close();
-        // Reconnect after 3s
-        setTimeout(connect, 3000);
-      };
+      storiesRef.current = incoming;
+      setStories(incoming);
+      setLoaded(true);
+    } catch {
+      // silently swallow — we'll retry on next poll
     }
-
-    connect();
-    return () => {
-      esRef.current?.close();
-    };
   }, []);
 
-  const loading = !connected && snap.stories.length === 0;
+  // ── Analyze current story ────────────────────────────────────────────────────
 
-  // Tune-in overlay — required for browser audio autoplay policy
-  if (!tuned) {
-    return (
-      <div
-        className="min-h-screen flex flex-col items-center justify-center cursor-pointer select-none"
-        style={{ background: 'linear-gradient(180deg, #020610 0%, #0A1628 50%, #020610 100%)' }}
-        onClick={() => setTuned(true)}
-      >
-        {/* Scanlines */}
-        <div className="fixed inset-0 pointer-events-none z-50" style={{ background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.06) 0px, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 3px)', mixBlendMode: 'multiply' }} />
+  const analyzeStory = useCallback(async (story: NewsItem) => {
+    if (analyzeInFlightRef.current === story.id) return;
+    analyzeInFlightRef.current = story.id;
+    setIsThinking(true);
+    setAnalysis(null);
 
-        {/* Glow */}
-        <div className="absolute rounded-full" style={{ width: 400, height: 400, background: 'radial-gradient(circle, rgba(58,142,255,0.15) 0%, transparent 70%)', animation: 'pulse-glow 2s ease-in-out infinite alternate' }} />
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          headline: story.title,
+          summary: story.summary,
+          source: story.source,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAnalysis(data.analysis ?? null);
+        setTotalAnalyzed(n => n + 1);
+      }
+    } catch {
+      // no analysis
+    } finally {
+      setIsThinking(false);
+      analyzeInFlightRef.current = null;
+    }
+  }, []);
 
-        {/* Logo */}
-        <div className="relative z-10 flex flex-col items-center gap-6">
-          <div className="flex items-center gap-2">
-            <div className="h-3 w-3 rounded-full" style={{ backgroundColor: '#CC0000', animation: 'live-pulse 1.5s ease-in-out infinite' }} />
-            <span className="text-xs font-black text-white tracking-[0.3em]">LIVE BROADCAST</span>
-          </div>
+  // ── Story rotation ───────────────────────────────────────────────────────────
 
-          <div className="text-center">
-            <div className="text-5xl font-black tracking-tight text-white leading-none">CLANKER</div>
-            <div className="text-5xl font-black tracking-tight leading-none" style={{ color: '#CC0000' }}>NEWS</div>
-            <div className="text-5xl font-black tracking-tight text-white leading-none">NETWORK</div>
-          </div>
+  const scheduleRotate = useCallback(() => {
+    if (rotateTimerRef.current) clearTimeout(rotateTimerRef.current);
+    rotateTimerRef.current = setTimeout(() => {
+      const list = storiesRef.current;
+      if (list.length === 0) return;
+      const next = (currentIndexRef.current + 1) % list.length;
+      currentIndexRef.current = next;
+      setCurrentIndex(next);
+      setStartedAt(Date.now());
+      setAnalysis(null);
+      analyzeStory(list[next]);
+      scheduleRotate();
+    }, ROTATE_INTERVAL_MS);
+  }, [analyzeStory]);
 
-          <div className="flex items-center gap-2 mt-2">
-            <span className="rounded px-2 py-1 text-xs font-black text-white tracking-[0.15em]" style={{ backgroundColor: '#3a8eff' }}>$CNN</span>
-            <span className="text-xs text-blue-300/50 tracking-wider">AI-POWERED NEWS</span>
-          </div>
+  // ── Bootstrap ────────────────────────────────────────────────────────────────
 
-          {/* Tune in button */}
-          <div
-            className="mt-8 rounded-lg border-2 px-10 py-4 text-center transition-all hover:scale-105"
-            style={{
-              borderColor: '#CC0000',
-              background: 'rgba(204,0,0,0.1)',
-              boxShadow: '0 0 30px rgba(204,0,0,0.3), 0 0 60px rgba(204,0,0,0.1)',
-              animation: 'border-glow 2s ease-in-out infinite',
-            }}
-          >
-            <div className="text-xl font-black text-white tracking-[0.2em]">▶ TUNE IN</div>
-            <div className="text-[10px] text-red-300/60 mt-1 tracking-wider">CLICK TO START LIVE BROADCAST</div>
-          </div>
+  useEffect(() => {
+    fetchNews().then(() => {
+      const list = storiesRef.current;
+      if (list.length > 0) {
+        currentIndexRef.current = 0;
+        setCurrentIndex(0);
+        setStartedAt(Date.now());
+        analyzeStory(list[0]);
+        scheduleRotate();
+      }
+    });
 
-          <div className="mt-4 text-[10px] text-blue-400/40 tracking-wider">Audio required for full experience</div>
-        </div>
-      </div>
-    );
-  }
+    const pollId = setInterval(fetchNews, POLL_INTERVAL_MS);
+
+    return () => {
+      clearInterval(pollId);
+      if (rotateTimerRef.current) clearTimeout(rotateTimerRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Trigger analyze when stories first load and there's a current story
+  useEffect(() => {
+    if (!loaded) return;
+    const list = storiesRef.current;
+    if (list.length > 0 && analyzeInFlightRef.current === null && analysis === null && !isThinking) {
+      analyzeStory(list[currentIndexRef.current]);
+      scheduleRotate();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
+
+  const story = stories[currentIndex] ?? null;
 
   return (
     <div className="min-h-screen pb-9" style={{ background: 'linear-gradient(180deg, #080e1a 0%, #0A1628 100%)' }}>
@@ -272,19 +221,9 @@ export default function CNNPage() {
               </div>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className="rounded px-1.5 py-0.5 text-[9px] font-black text-white tracking-widest" style={{ backgroundColor: '#3a8eff', letterSpacing: '0.12em' }}>$CNN</span>
-                <span className="text-[9px] text-blue-300/50 tracking-wider">AI-POWERED · BLOCKCHAIN NEWS</span>
+                <span className="text-[9px] text-blue-300/50 tracking-wider">AI-POWERED · CRYPTO NEWS</span>
               </div>
             </div>
-          </div>
-
-          {/* Center — viewer count */}
-          <div className="hidden md:flex items-center gap-6">
-            {snap.viewerCount > 0 && (
-              <div className="flex items-center gap-2 rounded border border-blue-700/30 bg-[#0d1f3c]/60 px-3 py-1">
-                <div className="h-1.5 w-1.5 rounded-full bg-green-400" style={{ animation: 'status-pulse 1s ease-in-out infinite alternate' }} />
-                <span className="text-[11px] font-bold text-green-400 font-mono">{snap.viewerCount} viewer{snap.viewerCount !== 1 ? 's' : ''} watching</span>
-              </div>
-            )}
           </div>
 
           {/* Right */}
@@ -292,9 +231,9 @@ export default function CNNPage() {
             <div className="flex items-center gap-1.5">
               <div
                 className="h-2.5 w-2.5 rounded-full"
-                style={{ backgroundColor: connected ? '#CC0000' : '#666', animation: connected ? 'live-pulse 1.5s ease-in-out infinite' : undefined }}
+                style={{ backgroundColor: loaded ? '#CC0000' : '#666', animation: loaded ? 'live-pulse 1.5s ease-in-out infinite' : undefined }}
               />
-              <span className="text-xs font-black text-white tracking-widest">{connected ? 'LIVE' : 'CONNECTING...'}</span>
+              <span className="text-xs font-black text-white tracking-widest">{loaded ? 'LIVE' : 'LOADING...'}</span>
             </div>
             <LiveClock />
           </div>
@@ -305,10 +244,10 @@ export default function CNNPage() {
 
       {/* Main content */}
       <main className="mx-auto max-w-[1400px] px-4 pt-4">
-        {loading ? (
+        {!loaded ? (
           <div className="flex flex-col items-center justify-center py-32 gap-4">
             <div className="h-12 w-12 rounded-full border-2 border-blue-600 border-t-transparent" style={{ animation: 'spin 1s linear infinite' }} />
-            <div className="text-blue-400 font-mono text-sm tracking-wider">CONNECTING TO BROADCAST...</div>
+            <div className="text-blue-400 font-mono text-sm tracking-wider">FETCHING CRYPTO FEEDS...</div>
             <div className="flex gap-1">
               {[0,1,2,3,4].map(i => (
                 <div
@@ -322,19 +261,18 @@ export default function CNNPage() {
         ) : (
           <div className="flex flex-col gap-4">
             <StatsPanel
-              storyCount={snap.totalAnalyzed}
-              sourceCount={snap.sourceCount}
-              viewerCount={snap.viewerCount}
-              serverStartedAt={snap.serverStartedAt}
-              totalAnalyzed={snap.totalAnalyzed}
+              storyCount={stories.length}
+              sourcesActive={sourcesActive}
+              totalAnalyzed={totalAnalyzed}
+              startedAt={startedAt}
             />
 
             <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr_240px] gap-4">
               {/* Left Sidebar */}
               <div className="hidden lg:block">
                 <Sidebar
-                  stories={snap.stories}
-                  currentIndex={snap.currentIndex}
+                  stories={stories}
+                  currentIndex={currentIndex}
                 />
               </div>
 
@@ -355,7 +293,7 @@ export default function CNNPage() {
                   >
                     <div className="flex items-center gap-2">
                       <div className="h-2 w-2 rounded-full" style={{ backgroundColor: '#CC0000', animation: 'live-pulse 1.2s ease-in-out infinite' }} />
-                      <span className="text-[10px] font-black tracking-widest text-white">AI ANCHOR — SYNCHRONIZED BROADCAST</span>
+                      <span className="text-[10px] font-black tracking-widest text-white">AI ANCHOR — LIVE CRYPTO BROADCAST</span>
                     </div>
                     <div className="flex items-center gap-3">
                       <button
@@ -384,19 +322,17 @@ export default function CNNPage() {
                   <div className="p-4">
                     {activeTab === 'anchor' ? (
                       <AIAnchor
-                        story={snap.story}
-                        currentIndex={snap.currentIndex}
-                        startedAt={snap.startedAt}
-                        storyCount={snap.storyCount}
-                        totalStories={snap.totalStories}
-                        analysis={snap.analysis}
-                        audioId={snap.audioId}
+                        story={story}
+                        currentIndex={currentIndex}
+                        startedAt={startedAt}
+                        totalStories={stories.length}
+                        analysis={analysis}
                         isThinking={isThinking}
                       />
                     ) : (
                       <NewsGrid
-                        stories={snap.stories}
-                        currentIndex={snap.currentIndex}
+                        stories={stories}
+                        currentIndex={currentIndex}
                         onSelect={() => {}}
                       />
                     )}
@@ -404,11 +340,11 @@ export default function CNNPage() {
                 </div>
 
                 {/* Feature story strip */}
-                {snap.stories.length > 0 && (
+                {stories.length > 0 && (
                   <div className="grid grid-cols-3 gap-3">
-                    {snap.stories.slice(snap.currentIndex, snap.currentIndex + 3).map((story, i) => (
+                    {stories.slice(currentIndex, currentIndex + 3).map((s, i) => (
                       <div
-                        key={story.id}
+                        key={s.id}
                         className="rounded border p-3"
                         style={{
                           borderColor: i === 0 ? 'rgba(58,142,255,0.4)' : 'rgba(26,58,107,0.5)',
@@ -416,9 +352,9 @@ export default function CNNPage() {
                         }}
                       >
                         <div className="mb-1 text-[9px] font-black uppercase tracking-wider" style={{ color: i === 0 ? '#CC0000' : '#3a8eff' }}>
-                          {i === 0 ? '▶ ON AIR NOW' : story.category} · {story.source}
+                          {i === 0 ? '▶ ON AIR NOW' : `${s.category} · ${s.source}`}
                         </div>
-                        <p className="text-white/80 text-xs leading-snug line-clamp-2">{story.title}</p>
+                        <p className="text-white/80 text-xs leading-snug line-clamp-2">{s.title}</p>
                       </div>
                     ))}
                   </div>
@@ -429,13 +365,13 @@ export default function CNNPage() {
               <div className="hidden lg:flex flex-col gap-4">
                 <div className="rounded-lg border p-4" style={{ borderColor: 'rgba(26,58,107,0.5)', background: '#0d1f3c' }}>
                   <h3 className="text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2 mb-3">About $CNN</h3>
-                  <p className="text-xs text-white/60 leading-relaxed">Clanker News Network is an AI-powered news broadcasting platform built on the blockchain. Our AI anchor monitors global news 24/7.</p>
+                  <p className="text-xs text-white/60 leading-relaxed">Clanker News Network is an AI-powered crypto news channel built on Base. Our AI anchor monitors the blockchain 24/7 and delivers real-time analysis of DeFi, memecoins, and on-chain activity.</p>
                   <div className="mt-3 flex flex-col gap-2">
                     {[
                       { label: 'Token', value: '$CNN', color: 'text-white' },
                       { label: 'Network', value: 'BASE', color: 'text-green-400' },
                       { label: 'Creator', value: 'Clanker', color: 'text-blue-300' },
-                      { label: 'Viewers', value: `${snap.viewerCount} live`, color: 'text-green-400' },
+                      { label: 'AI Model', value: 'Llama 3.3', color: 'text-purple-400' },
                     ].map(row => (
                       <div key={row.label} className="flex items-center justify-between text-[10px]">
                         <span className="text-blue-300/60">{row.label}</span>
@@ -448,11 +384,11 @@ export default function CNNPage() {
                 <div className="rounded-lg border p-4" style={{ borderColor: 'rgba(26,58,107,0.5)', background: '#0d1f3c' }}>
                   <h3 className="text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2 mb-3">Signal Quality</h3>
                   {[
-                    { name: 'BBC', quality: 98, color: '#CC0000' },
-                    { name: 'Reuters', quality: 95, color: '#FF6600' },
-                    { name: 'NY Times', quality: 91, color: '#3a8eff' },
-                    { name: 'Al Jazeera', quality: 87, color: '#00c896' },
-                    { name: 'Google News', quality: 99, color: '#a855f7' },
+                    { name: 'CoinDesk', quality: 98, color: '#CC0000' },
+                    { name: 'CoinTelegraph', quality: 95, color: '#FF6600' },
+                    { name: 'Decrypt', quality: 91, color: '#3a8eff' },
+                    { name: 'The Block', quality: 88, color: '#00c896' },
+                    { name: 'Bankless', quality: 93, color: '#a855f7' },
                   ].map(src => (
                     <div key={src.name} className="mb-2">
                       <div className="flex justify-between text-[9px] mb-1">
@@ -469,16 +405,16 @@ export default function CNNPage() {
                 <div className="rounded-lg border p-4 flex-1" style={{ borderColor: 'rgba(26,58,107,0.5)', background: '#0d1f3c' }}>
                   <h3 className="text-[10px] font-black tracking-widest text-blue-400 uppercase border-b border-blue-800/40 pb-2 mb-3">Latest Updates</h3>
                   <div className="flex flex-col gap-2">
-                    {snap.stories.slice(0, 6).map((story, i) => (
-                      <div key={story.id} className="text-left">
+                    {stories.slice(0, 6).map((s, i) => (
+                      <div key={s.id} className="text-left">
                         <p
                           className="text-[10px] leading-snug line-clamp-2"
-                          style={{ color: i === snap.currentIndex ? '#3a8eff' : 'rgba(255,255,255,0.65)' }}
+                          style={{ color: i === currentIndex ? '#3a8eff' : 'rgba(255,255,255,0.65)' }}
                         >
-                          {i === snap.currentIndex && <span className="text-[#CC0000] font-black mr-1">▶</span>}
-                          {story.title}
+                          {i === currentIndex && <span className="text-[#CC0000] font-black mr-1">▶</span>}
+                          {s.title}
                         </p>
-                        <span className="text-[8px] text-blue-500/60 font-mono">{story.source}</span>
+                        <span className="text-[8px] text-blue-500/60 font-mono">{s.source}</span>
                       </div>
                     ))}
                   </div>
@@ -489,7 +425,7 @@ export default function CNNPage() {
         )}
       </main>
 
-      <Ticker stories={tickerStories} />
+      <Ticker stories={stories.slice(0, 20)} />
     </div>
   );
 }

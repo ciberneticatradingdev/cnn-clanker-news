@@ -1,56 +1,41 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { NewsItem } from '../api/broadcast/route';
+import type { NewsItem } from '../types';
 
 interface AIAnchorProps {
   story: NewsItem | null;
   currentIndex: number;
   startedAt: number;
-  storyCount: number;
   totalStories: number;
   analysis: string | null;
-  audioId: string | null;
   isThinking: boolean;
 }
-
-// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function AIAnchor({
   story,
   currentIndex,
-  startedAt,
-  storyCount,
   totalStories,
   analysis,
-  audioId,
   isThinking,
 }: AIAnchorProps) {
   const [headlineText, setHeadlineText] = useState('');
   const [analysisText, setAnalysisText] = useState('');
-  const [isSpeaking, setIsSpeaking] = useState(false);
   const [isTypingHeadline, setIsTypingHeadline] = useState(false);
   const [isTypingAnalysis, setIsTypingAnalysis] = useState(false);
-  const [barsActive, setBarsActive] = useState(false);
-  const [muted, setMuted] = useState(false);
 
   const headlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const analysisTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const analysisDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevStoryIdRef = useRef<string | null>(null);
-  const prevAudioIdRef = useRef<string | null>(null);
-  const muteRef = useRef(muted);
-  useEffect(() => { muteRef.current = muted; }, [muted]);
 
-  // ── Typewriter helpers ──────────────────────────────────────────────────────
+  // ── Typewriter helper ───────────────────────────────────────────────────────
 
   const typeText = useCallback((
     text: string,
     timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>,
     setter: (t: string) => void,
     setTyping: (b: boolean) => void,
-    onDone?: () => void,
   ) => {
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
     setter('');
@@ -66,48 +51,18 @@ export default function AIAnchor({
         timerRef.current = setTimeout(type, delay);
       } else {
         setTyping(false);
-        onDone?.();
       }
     };
     timerRef.current = setTimeout(type, 60);
   }, []);
 
-  // ── Audio playback ──────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!audioId || audioId === prevAudioIdRef.current) return;
-    prevAudioIdRef.current = audioId;
-
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = '';
-      audioRef.current = null;
-    }
-
-    const audio = new Audio(`/api/tts?id=${audioId}`);
-    audio.muted = muteRef.current;
-    audioRef.current = audio;
-
-    audio.onplay = () => { setIsSpeaking(true); setBarsActive(true); };
-    audio.onended = () => { setIsSpeaking(false); setBarsActive(false); };
-    audio.onerror = () => { setIsSpeaking(false); setBarsActive(false); };
-
-    audio.play().catch(err => console.error('Audio play failed:', err));
-  }, [audioId]);
-
-  // Sync mute state to active audio element
-  useEffect(() => {
-    if (audioRef.current) audioRef.current.muted = muted;
-  }, [muted]);
-
-  // ── Story change ────────────────────────────────────────────────────────────
+  // ── Story change ─────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!story) return;
     if (story.id === prevStoryIdRef.current) return;
     prevStoryIdRef.current = story.id;
 
-    // Clear previous typewriters
     if (headlineTimerRef.current) { clearTimeout(headlineTimerRef.current); headlineTimerRef.current = null; }
     if (analysisTimerRef.current) { clearTimeout(analysisTimerRef.current); analysisTimerRef.current = null; }
     if (analysisDelayRef.current) { clearTimeout(analysisDelayRef.current); analysisDelayRef.current = null; }
@@ -116,9 +71,9 @@ export default function AIAnchor({
 
     typeText(story.title, headlineTimerRef, setHeadlineText, setIsTypingHeadline);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [story?.id, startedAt]);
+  }, [story?.id]);
 
-  // ── Analysis typewriter (delayed so headline starts first) ─────────────────
+  // ── Analysis typewriter ──────────────────────────────────────────────────────
 
   useEffect(() => {
     if (!analysis) { setAnalysisText(''); return; }
@@ -131,30 +86,27 @@ export default function AIAnchor({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis]);
 
-  // ── Cleanup on unmount ──────────────────────────────────────────────────────
+  // ── Cleanup ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     return () => {
       if (headlineTimerRef.current) clearTimeout(headlineTimerRef.current);
       if (analysisTimerRef.current) clearTimeout(analysisTimerRef.current);
       if (analysisDelayRef.current) clearTimeout(analysisDelayRef.current);
-      audioRef.current?.pause();
     };
   }, []);
 
-  // ── Derived state ───────────────────────────────────────────────────────────
+  // ── Derived state ─────────────────────────────────────────────────────────────
 
   const bars = Array.from({ length: 9 });
 
   const statusLabel = isThinking
-    ? 'AI THINKING...'
-    : isSpeaking
-    ? 'ON AIR'
+    ? 'AI ANALYZING...'
     : isTypingHeadline
     ? 'PROCESSING...'
-    : 'STANDBY';
+    : 'ON AIR';
 
-  const showAnalyzing = isThinking && !story;
+  const statusColor = isThinking ? '#f59e0b' : isTypingHeadline ? '#3a8eff' : '#00ff88';
 
   return (
     <div className="flex flex-col items-center w-full h-full">
@@ -167,11 +119,10 @@ export default function AIAnchor({
             width: 200,
             height: 200,
             background: 'radial-gradient(circle, rgba(26,58,107,0.8) 0%, rgba(10,22,40,0) 70%)',
-            animation: isSpeaking ? 'pulse-glow 1s ease-in-out infinite alternate' : undefined,
           }}
         />
 
-        {/* Brain/thinking pulse ring */}
+        {/* Thinking pulse ring */}
         {isThinking && (
           <div
             className="absolute rounded-full border-2"
@@ -193,11 +144,9 @@ export default function AIAnchor({
           xmlns="http://www.w3.org/2000/svg"
           className="relative z-10"
           style={{
-            filter: isSpeaking
-              ? 'drop-shadow(0 0 14px #3a8eff) drop-shadow(0 0 28px rgba(58,142,255,0.5))'
-              : isThinking
+            filter: isThinking
               ? 'drop-shadow(0 0 10px rgba(245,158,11,0.6))'
-              : 'drop-shadow(0 0 4px rgba(58,142,255,0.3))',
+              : 'drop-shadow(0 0 8px rgba(58,142,255,0.4))',
             transition: 'filter 0.4s ease',
           }}
         >
@@ -219,25 +168,18 @@ export default function AIAnchor({
           <ellipse cx="92" cy="84" rx="7" ry="6" fill="#0A1628" />
           <ellipse
             cx="68" cy="84" rx="5" ry="4"
-            fill={isSpeaking ? '#3a8eff' : isThinking ? '#f59e0b' : '#1a5abf'}
-            style={{ animation: (isSpeaking || isThinking) ? 'eye-pulse 0.8s ease-in-out infinite alternate' : undefined }}
+            fill={isThinking ? '#f59e0b' : '#1a5abf'}
+            style={{ animation: isThinking ? 'eye-pulse 0.8s ease-in-out infinite alternate' : undefined }}
           />
           <ellipse
             cx="92" cy="84" rx="5" ry="4"
-            fill={isSpeaking ? '#3a8eff' : isThinking ? '#f59e0b' : '#1a5abf'}
-            style={{ animation: (isSpeaking || isThinking) ? 'eye-pulse 0.8s ease-in-out infinite alternate' : undefined }}
+            fill={isThinking ? '#f59e0b' : '#1a5abf'}
+            style={{ animation: isThinking ? 'eye-pulse 0.8s ease-in-out infinite alternate' : undefined }}
           />
           <circle cx="70" cy="82" r="1.5" fill="white" opacity="0.8" />
           <circle cx="94" cy="82" r="1.5" fill="white" opacity="0.8" />
           <ellipse cx="80" cy="91" rx="3" ry="2" fill="#b08060" />
-          {isSpeaking ? (
-            <>
-              <ellipse cx="80" cy="99" rx="9" ry="5" fill="#0A1628" />
-              <ellipse cx="80" cy="99" rx="7" ry="3" fill="#1a1a2e" />
-            </>
-          ) : (
-            <path d="M71 99 Q80 104 89 99" stroke="#b08060" strokeWidth="2" fill="none" strokeLinecap="round" />
-          )}
+          <path d="M71 99 Q80 104 89 99" stroke="#b08060" strokeWidth="2" fill="none" strokeLinecap="round" />
           <ellipse cx="80" cy="60" rx="30" ry="14" fill="#3a2a1a" />
           <rect x="50" y="58" width="60" height="12" rx="2" fill="#3a2a1a" />
           <ellipse cx="48" cy="88" rx="5" ry="7" fill="#c8a882" />
@@ -256,17 +198,11 @@ export default function AIAnchor({
               key={i}
               className="w-[3px] rounded-full"
               style={{
-                backgroundColor: barsActive
-                  ? '#3a8eff'
-                  : isThinking
-                  ? '#f59e0b'
-                  : '#1a3a6b',
-                height: barsActive ? undefined : 4,
+                backgroundColor: isThinking ? '#f59e0b' : '#1a3a6b',
+                height: 4,
                 minHeight: 4,
                 maxHeight: 36,
-                animation: barsActive
-                  ? `wave-bar ${0.4 + i * 0.07}s ease-in-out infinite alternate`
-                  : isThinking
+                animation: isThinking
                   ? `wave-bar ${0.8 + i * 0.1}s ease-in-out infinite alternate`
                   : undefined,
                 animationDelay: `${i * 0.06}s`,
@@ -283,12 +219,12 @@ export default function AIAnchor({
           <div
             className="h-2 w-2 rounded-full"
             style={{
-              backgroundColor: isSpeaking ? '#00ff88' : isThinking ? '#f59e0b' : '#666',
-              boxShadow: isSpeaking ? '0 0 6px #00ff88' : isThinking ? '0 0 6px #f59e0b' : 'none',
-              animation: (isSpeaking || isThinking) ? 'status-pulse 0.6s ease-in-out infinite alternate' : undefined,
+              backgroundColor: statusColor,
+              boxShadow: `0 0 6px ${statusColor}`,
+              animation: 'status-pulse 0.6s ease-in-out infinite alternate',
             }}
           />
-          <span className="text-xs font-mono" style={{ color: isSpeaking ? '#00ff88' : isThinking ? '#f59e0b' : '#666' }}>
+          <span className="text-xs font-mono" style={{ color: statusColor }}>
             {statusLabel}
             {isThinking && (
               <span style={{ animation: 'status-pulse 0.5s ease-in-out infinite alternate' }}>
@@ -297,24 +233,9 @@ export default function AIAnchor({
             )}
           </span>
         </div>
-        <div className="flex items-center gap-3">
-          {/* Mute toggle */}
-          <button
-            onClick={() => setMuted(m => !m)}
-            className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-mono transition-colors"
-            style={{
-              color: muted ? '#666' : '#3a8eff',
-              border: '1px solid',
-              borderColor: muted ? '#333' : 'rgba(58,142,255,0.4)',
-              background: muted ? 'transparent' : 'rgba(58,142,255,0.05)',
-            }}
-          >
-            {muted ? '🔇 MUTED' : '🔊 AUDIO'}
-          </button>
-          <span className="text-[10px] text-blue-500 font-mono">
-            STORY {currentIndex + 1} / {totalStories}
-          </span>
-        </div>
+        <span className="text-[10px] text-blue-500 font-mono">
+          STORY {currentIndex + 1} / {totalStories}
+        </span>
       </div>
 
       {/* AI Thinking overlay */}
@@ -323,7 +244,7 @@ export default function AIAnchor({
           <div className="flex items-center gap-2 mb-2">
             <span className="text-lg">🧠</span>
             <div className="text-yellow-400 font-mono text-sm font-black tracking-widest animate-pulse">
-              ANALYZING FEEDS...
+              ANALYZING CRYPTO FEEDS...
             </div>
           </div>
           <div className="flex gap-1.5">
@@ -340,7 +261,7 @@ export default function AIAnchor({
             ))}
           </div>
           <div className="text-yellow-600/50 text-[10px] mt-2 font-mono">
-            Groq Llama 3.3 · OpenAI TTS · Onyx voice
+            Groq Llama 3.3 · AI Analysis in progress
           </div>
         </div>
       )}

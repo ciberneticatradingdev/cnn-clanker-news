@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { NewsItem } from '../api/broadcast/route';
+import type { NewsItem } from '../types';
 
 interface BreakingBannerProps {
   story: NewsItem | null;
