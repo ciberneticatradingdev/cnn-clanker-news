@@ -85,8 +85,8 @@ async function generateTTS(text: string): Promise<{ id: string; durationMs: numb
 
 // ─── Brain Startup ─────────────────────────────────────────────────────────────
 
-function startBrain() {
-  if (global.__cnn_brainRunning) return;
+export function ensureBrainRunning() {
+  if (global.__cnn_brainRunning && global.__cnn_brain) return;
   global.__cnn_brainRunning = true;
 
   const brain = new BrainEngine({
@@ -96,7 +96,11 @@ function startBrain() {
 
   global.__cnn_brain = brain;
   brain.start();
+  console.log('[CNN] Brain Engine started — running 24/7');
 }
+
+// Start brain immediately on module load (not on first viewer)
+ensureBrainRunning();
 
 // ─── SSE Route Handler ─────────────────────────────────────────────────────────
 
@@ -109,8 +113,8 @@ export async function GET(_req: NextRequest) {
       clientCtrl = ctrl;
       cls.add(ctrl);
 
-      // Start the brain if not already running
-      startBrain();
+      // Ensure brain is running (safety check — should already be running)
+      ensureBrainRunning();
 
       const brain = global.__cnn_brain;
       const brainState = brain?.getCurrentState();
