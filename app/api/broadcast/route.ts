@@ -99,8 +99,10 @@ export function ensureBrainRunning() {
   console.log('[CNN] Brain Engine started — running 24/7');
 }
 
-// Start brain immediately on module load (not on first viewer)
-ensureBrainRunning();
+// Start brain on module load — but NOT during build (no NEXT_PHASE means runtime)
+if (process.env.NEXT_PHASE !== 'phase-production-build') {
+  ensureBrainRunning();
+}
 
 // ─── SSE Route Handler ─────────────────────────────────────────────────────────
 
