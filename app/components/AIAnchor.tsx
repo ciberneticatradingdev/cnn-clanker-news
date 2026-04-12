@@ -407,6 +407,8 @@ export default function AIAnchor({
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevAudioIdRef = useRef<string | null>(null);
+  const initialAudioIdRef = useRef<string | null>(null);
+  const isFirstAudioRef = useRef(true);
   const muteRef = useRef(muted);
   useEffect(() => { muteRef.current = muted; }, [muted]);
 
@@ -414,6 +416,15 @@ export default function AIAnchor({
 
   useEffect(() => {
     if (!audioId || audioId === prevAudioIdRef.current) return;
+
+    // Skip the very first audioId (from state snapshot — audio already played/expired)
+    if (isFirstAudioRef.current) {
+      isFirstAudioRef.current = false;
+      initialAudioIdRef.current = audioId;
+      prevAudioIdRef.current = audioId;
+      return;
+    }
+
     prevAudioIdRef.current = audioId;
 
     if (audioRef.current) {
@@ -428,9 +439,17 @@ export default function AIAnchor({
 
     audio.onplay = () => { setIsSpeaking(true); setBarsActive(true); };
     audio.onended = () => { setIsSpeaking(false); setBarsActive(false); };
-    audio.onerror = () => { setIsSpeaking(false); setBarsActive(false); };
+    audio.onerror = () => {
+      console.error('Audio error for id:', audioId);
+      setIsSpeaking(false); setBarsActive(false);
+    };
 
-    audio.play().catch(err => console.error('Audio play failed:', err));
+    // Try to play — may fail if browser hasn't been unlocked yet
+    audio.play().catch(err => {
+      console.warn('Audio play blocked (will retry on next story):', err.message);
+      setIsSpeaking(false);
+      setBarsActive(false);
+    });
   }, [audioId]);
 
   useEffect(() => {

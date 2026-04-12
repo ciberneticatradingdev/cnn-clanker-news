@@ -107,6 +107,24 @@ export default function CNNPage() {
   const [brainState, setBrainState] = useState<BrainState>('SCANNING');
   const [anchorText, setAnchorText] = useState('');
   const esRef = useRef<EventSource | null>(null);
+  const audioUnlockedRef = useRef(false);
+
+  // Unlock browser audio on TUNE IN click
+  const handleTuneIn = () => {
+    // Create and resume an AudioContext to unlock audio playback
+    try {
+      const ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      if (ctx.state === 'suspended') ctx.resume();
+      // Play a silent buffer to fully unlock
+      const buf = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch { /* ignore */ }
+    audioUnlockedRef.current = true;
+    setTuned(true);
+  };
 
   // Connect to SSE broadcast
   useEffect(() => {
@@ -242,7 +260,7 @@ export default function CNNPage() {
       <div
         className="min-h-screen flex flex-col items-center justify-center cursor-pointer select-none"
         style={{ background: 'linear-gradient(180deg, #020610 0%, #0A1628 50%, #020610 100%)' }}
-        onClick={() => setTuned(true)}
+        onClick={handleTuneIn}
       >
         {/* Scanlines */}
         <div className="fixed inset-0 pointer-events-none z-50" style={{ background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.06) 0px, rgba(0,0,0,0.06) 1px, transparent 1px, transparent 3px)', mixBlendMode: 'multiply' }} />
