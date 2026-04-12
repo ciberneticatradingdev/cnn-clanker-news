@@ -8,18 +8,18 @@ interface SidebarProps {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  World: '#3a8eff',
-  Business: '#00c896',
-  Tech: '#a855f7',
-  Politics: '#f59e0b',
+  Crypto: '#f59e0b',
+  DeFi: '#00c896',
+  Web3: '#a855f7',
+  Regulation: '#3a8eff',
 };
 
 const SOURCES = [
-  { name: 'BBC NEWS', color: '#CC0000' },
-  { name: 'REUTERS', color: '#FF6600' },
-  { name: 'NY TIMES', color: '#666' },
-  { name: 'AL JAZEERA', color: '#00873d' },
-  { name: 'GOOGLE NEWS', color: '#4285f4' },
+  { name: 'COINDESK', color: '#0052FF' },
+  { name: 'COINTELEGRAPH', color: '#FFD700' },
+  { name: 'DECRYPT', color: '#00c896' },
+  { name: 'THE BLOCK', color: '#FF6600' },
+  { name: 'BANKLESS', color: '#a855f7' },
 ];
 
 function timeAgo(ts: string) {

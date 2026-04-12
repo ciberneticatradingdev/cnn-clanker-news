@@ -9,10 +9,10 @@ interface NewsGridProps {
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  World: '#3a8eff',
-  Business: '#00c896',
-  Tech: '#a855f7',
-  Politics: '#f59e0b',
+  Crypto: '#f59e0b',
+  DeFi: '#00c896',
+  Web3: '#a855f7',
+  Regulation: '#3a8eff',
 };
 
 function timeAgo(ts: string) {
