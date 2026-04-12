@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import type { NewsItem } from './api/broadcast/route';
+import type { BrainState } from './api/brain/dialogue';
 import Ticker from './components/Ticker';
 import Sidebar from './components/Sidebar';
 import StatsPanel from './components/StatsPanel';
@@ -11,7 +12,7 @@ import BreakingBanner from './components/BreakingBanner';
 
 const AIAnchor = dynamic(() => import('./components/AIAnchor'), { ssr: false });
 
-// ─── Broadcast state received from SSE ───────────────────────────────────────
+// ─── Broadcast state received from SSE ────────────────────────────────────────
 
 interface BroadcastSnapshot {
   story: NewsItem | null;
@@ -43,7 +44,7 @@ const DEFAULT_SNAPSHOT: BroadcastSnapshot = {
   audioId: null,
 };
 
-// ─── Live Clock ───────────────────────────────────────────────────────────────
+// ─── Live Clock ────────────────────────────────────────────────────────────────
 
 function LiveClock() {
   const [time, setTime] = useState('');
@@ -68,7 +69,33 @@ function LiveClock() {
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── Brain State Badge ─────────────────────────────────────────────────────────
+
+function BrainStateBadge({ state }: { state: BrainState }) {
+  const config: Record<BrainState, { label: string; color: string; bg: string; dot: string }> = {
+    BREAKING:  { label: 'BREAKING',  color: '#ffffff', bg: '#CC0000',            dot: '#ff6666' },
+    REPORTING: { label: 'ON AIR',    color: '#ffffff', bg: '#1a3a6b',            dot: '#00ff88' },
+    THINKING:  { label: 'ANALYZING', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)', dot: '#f59e0b' },
+    MONOLOGUE: { label: 'COMMENTARY',color: '#a855f7', bg: 'rgba(168,85,247,0.15)', dot: '#a855f7' },
+    SCANNING:  { label: 'SCANNING',  color: '#3a8eff', bg: 'rgba(58,142,255,0.15)', dot: '#3a8eff' },
+  };
+  const c = config[state] ?? config.SCANNING;
+
+  return (
+    <div
+      className="flex items-center gap-1.5 rounded px-2 py-0.5"
+      style={{ background: c.bg, border: `1px solid ${c.dot}44` }}
+    >
+      <div
+        className="h-1.5 w-1.5 rounded-full"
+        style={{ backgroundColor: c.dot, animation: 'status-pulse 1s ease-in-out infinite alternate' }}
+      />
+      <span className="text-[10px] font-black tracking-widest" style={{ color: c.color }}>{c.label}</span>
+    </div>
+  );
+}
+
+// ─── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function CNNPage() {
   const [snap, setSnap] = useState<BroadcastSnapshot>(DEFAULT_SNAPSHOT);
@@ -76,8 +103,9 @@ export default function CNNPage() {
   const [breakingStory, setBreakingStory] = useState<NewsItem | null>(null);
   const [connected, setConnected] = useState(false);
   const [activeTab, setActiveTab] = useState<'anchor' | 'grid'>('anchor');
-  const [tuned, setTuned] = useState(false); // user clicked to enable audio
-  const [isThinking, setIsThinking] = useState(false);
+  const [tuned, setTuned] = useState(false);
+  const [brainState, setBrainState] = useState<BrainState>('SCANNING');
+  const [anchorText, setAnchorText] = useState('');
   const esRef = useRef<EventSource | null>(null);
 
   // Connect to SSE broadcast
@@ -96,7 +124,12 @@ export default function CNNPage() {
 
         switch (msg.type) {
           case 'state': {
-            const s = msg as unknown as BroadcastSnapshot & { type: string; broadcastStartedAt?: number };
+            const s = msg as unknown as BroadcastSnapshot & {
+              type: string;
+              broadcastStartedAt?: number;
+              brainState?: BrainState;
+              anchorText?: string;
+            };
             setSnap({
               story: s.story,
               currentIndex: s.currentIndex,
@@ -112,15 +145,44 @@ export default function CNNPage() {
               audioId: s.audioId ?? null,
             });
             setTickerStories((s.stories ?? []).slice(0, 20));
+            if (s.brainState) setBrainState(s.brainState);
+            if (s.anchorText) setAnchorText(s.anchorText);
             break;
           }
+
+          case 'state-change': {
+            const sc = msg as { state: BrainState; story?: NewsItem; queueSize?: number };
+            setBrainState(sc.state);
+            if (sc.story) {
+              setSnap(prev => ({ ...prev, story: sc.story! }));
+            }
+            break;
+          }
+
+          case 'anchor-text': {
+            const at = msg as { text: string; isTyping: boolean; audioId?: string };
+            setAnchorText(at.text);
+            if (at.audioId) {
+              setSnap(prev => ({ ...prev, audioId: at.audioId! }));
+            }
+            break;
+          }
+
           case 'thinking': {
-            setIsThinking(true);
+            setBrainState('THINKING');
             break;
           }
+
           case 'story-change': {
-            const sc = msg as { story: NewsItem; currentIndex: number; startedAt: number; totalStories: number; storyCount: number; analysis?: string; audioId?: string };
-            setIsThinking(false);
+            const sc = msg as {
+              story: NewsItem;
+              currentIndex: number;
+              startedAt: number;
+              totalStories: number;
+              storyCount: number;
+              analysis?: string;
+              audioId?: string;
+            };
             setSnap(prev => ({
               ...prev,
               story: sc.story,
@@ -133,20 +195,29 @@ export default function CNNPage() {
             }));
             break;
           }
+
           case 'breaking': {
             const br = msg as { story: NewsItem };
             setBreakingStory(br.story);
+            setBrainState('BREAKING');
             break;
           }
+
           case 'viewer-count': {
             const vc = msg as { count: number };
             setSnap(prev => ({ ...prev, viewerCount: vc.count }));
             break;
           }
+
           case 'ticker': {
             const tk = msg as { stories: NewsItem[] };
             setTickerStories(tk.stories ?? []);
             setSnap(prev => ({ ...prev, stories: tk.stories ?? prev.stories }));
+            break;
+          }
+
+          case 'scanner-status': {
+            // Scanner status received — could show in UI if desired
             break;
           }
         }
@@ -155,15 +226,12 @@ export default function CNNPage() {
       es.onerror = () => {
         setConnected(false);
         es.close();
-        // Reconnect after 3s
         setTimeout(connect, 3000);
       };
     }
 
     connect();
-    return () => {
-      esRef.current?.close();
-    };
+    return () => { esRef.current?.close(); };
   }, []);
 
   const loading = !connected && snap.stories.length === 0;
@@ -277,8 +345,9 @@ export default function CNNPage() {
             </div>
           </div>
 
-          {/* Center — viewer count */}
-          <div className="hidden md:flex items-center gap-6">
+          {/* Center — brain state + viewer count */}
+          <div className="hidden md:flex items-center gap-4">
+            <BrainStateBadge state={brainState} />
             {snap.viewerCount > 0 && (
               <div className="flex items-center gap-2 rounded border border-blue-700/30 bg-[#0d1f3c]/60 px-3 py-1">
                 <div className="h-1.5 w-1.5 rounded-full bg-green-400" style={{ animation: 'status-pulse 1s ease-in-out infinite alternate' }} />
@@ -343,9 +412,15 @@ export default function CNNPage() {
                 <div
                   className="rounded-lg border overflow-hidden"
                   style={{
-                    borderColor: 'rgba(58, 142, 255, 0.25)',
+                    borderColor: brainState === 'BREAKING'
+                      ? 'rgba(204,0,0,0.6)'
+                      : brainState === 'THINKING'
+                      ? 'rgba(245,158,11,0.3)'
+                      : 'rgba(58, 142, 255, 0.25)',
                     background: 'linear-gradient(180deg, #0d1f3c 0%, #0A1628 100%)',
-                    boxShadow: '0 0 40px rgba(0,0,0,0.5), 0 0 80px rgba(58,142,255,0.05)',
+                    boxShadow: brainState === 'BREAKING'
+                      ? '0 0 40px rgba(204,0,0,0.2), 0 0 80px rgba(204,0,0,0.05)'
+                      : '0 0 40px rgba(0,0,0,0.5), 0 0 80px rgba(58,142,255,0.05)',
                     animation: 'border-glow 3s ease-in-out infinite',
                   }}
                 >
@@ -391,7 +466,8 @@ export default function CNNPage() {
                         totalStories={snap.totalStories}
                         analysis={snap.analysis}
                         audioId={snap.audioId}
-                        isThinking={isThinking}
+                        brainState={brainState}
+                        anchorText={anchorText}
                       />
                     ) : (
                       <NewsGrid
